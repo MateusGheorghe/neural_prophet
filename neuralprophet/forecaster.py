@@ -94,7 +94,8 @@ class NeuralProphet:
                 default: None, no regularization
 
             ## AR Config
-            n_lags (int): Previous time series steps to include in auto-regression. Aka AR-order
+            # n_lags (int): Previous time series steps to include in auto-regression. Aka AR-order
+            n_ar (int): Previous time series steps to include in auto-regression. Aka AR-order
             ar_sparsity (float): [0-1], how much sparsity to enduce in the AR-coefficients.
                 Should be around (# nonzero components) / (AR order), eg. 3/100 = 0.03
 
@@ -164,12 +165,6 @@ class NeuralProphet:
         # AR
         self.config_ar = configure.from_kwargs(configure.AR, kwargs)
         self.n_lags = self.config_ar.n_lags
-        if n_lags == 0 and n_forecasts > 1:
-            self.n_forecasts = 1
-            log.warning(
-                "Changing n_forecasts to 1. Without lags, the forecast can be "
-                "computed for any future time, independent of lagged values"
-            )
 
         # Model
         self.config_model = configure.from_kwargs(configure.Model, kwargs)
@@ -193,7 +188,9 @@ class NeuralProphet:
 
         # Extra Regressors
         self.config_covar = None
+        self.n_regressors = 0
         self.regressors_config = None
+        self.allow_nnet_covar = False
 
         # set during fit()
         self.data_freq = None
@@ -226,6 +223,8 @@ class NeuralProphet:
             config_holidays=self.country_holidays_config,
             n_forecasts=self.n_forecasts,
             n_lags=self.n_lags,
+            n_regressors=self.n_regressors,
+            allow_nnet_covar=self.allow_nnet_covar,
             num_hidden_layers=self.config_model.num_hidden_layers,
             d_hidden=self.config_model.d_hidden,
         )
@@ -254,6 +253,8 @@ class NeuralProphet:
             n_forecasts=self.n_forecasts,
             predict_mode=predict_mode,
             covar_config=self.config_covar,
+            n_regressors=self.n_regressors,
+            allow_nnet_covar=self.allow_nnet_covar,
             regressors_config=self.regressors_config,
         )
 
@@ -268,7 +269,7 @@ class NeuralProphet:
         Returns:
             pre-processed df
         """
-        if self.n_lags == 0 and not predicting:
+        if self.n_lags == 0 and not self.allow_nnet_covar and not predicting:
             # we can drop rows with NA in y
             sum_na = sum(df["y"].isna())
             if sum_na > 0:
@@ -276,7 +277,7 @@ class NeuralProphet:
                 log.info("dropped {} NAN row in 'y'".format(sum_na))
 
         # add missing dates for autoregression modelling
-        if self.n_lags > 0:
+        if self.n_lags > 0 or self.allow_nnet_covar: 
             df, missing_dates = df_utils.add_missing_dates_nan(df, freq=freq)
             if missing_dates > 0:
                 if self.impute_missing:
@@ -290,7 +291,7 @@ class NeuralProphet:
 
         # impute missing values
         data_columns = []
-        if self.n_lags > 0:
+        if self.n_lags > 0 or self.allow_nnet_covar:
             data_columns.append("y")
         if self.config_covar is not None:
             data_columns.extend(self.config_covar.keys())
@@ -479,6 +480,7 @@ class NeuralProphet:
         """
         self.model.train()
         for i, (inputs, targets) in enumerate(loader):
+            # print(inputs['covariates'])
             # Run forward calculation
             predicted = self.model.forward(inputs)
             # Compute loss.
@@ -511,7 +513,7 @@ class NeuralProphet:
         reg_loss = torch.zeros(1, dtype=torch.float, requires_grad=False)
         if delay_weight > 0:
             # Add regularization of AR weights - sparsify
-            if self.model.n_lags > 0 and self.config_ar.reg_lambda is not None:
+            if (self.model.n_lags > 0 or self.allow_nnet_covar) and self.config_ar.reg_lambda is not None:
                 reg_ar = self.config_ar.regularize(self.model.ar_weights)
                 reg_ar = torch.sum(reg_ar).squeeze() / self.n_forecasts
                 reg_loss += self.config_ar.reg_lambda * reg_ar
@@ -586,6 +588,12 @@ class NeuralProphet:
                     "Or install the missing package manually: 'pip install livelossplot'",
                     exc_info=True,
                 )
+        if self.n_lags == 0 and self.n_regressors==0 and self.n_forecasts > 1:
+            self.n_forecasts = 1
+            log.warning(
+                "Changing n_forecasts to 1. Without lags, the forecast can be "
+                "computed for any future time, independent of lagged values. "
+            ) 
 
         loader = self._init_train_loader(df)
         val = df_val is not None
@@ -597,6 +605,7 @@ class NeuralProphet:
         if val:
             val_loader = self._init_val_loader(df_val)
             val_metrics = metrics.MetricsCollection([m.new() for m in self.metrics.batch_metrics])
+        
 
         ## Run
         start = time.time()
@@ -653,7 +662,7 @@ class NeuralProphet:
         return metrics_df
 
     def _eval_true_ar(self):
-        assert self.n_lags > 0
+        assert self.n_lags > 0 or self.allow_nnet_covar
         if self.highlight_forecast_step_n is None:
             if self.n_lags > 1:
                 raise ValueError("Please define forecast_lag for sTPE computation")
@@ -710,8 +719,12 @@ class NeuralProphet:
                 DF[i]=df_utils.check_dataframe(DF[i],check_y=False)
                 DF[i]=self._handle_missing_data(DF[i], freq=freq, predicting=False)
             DF_concat,Episode=df_utils.join_dataframes(DF)
+            if self.n_regressors>self.n_lags:
+                aux_lags=self.n_regressors
+            else:
+                aux_lags=self.n_lags
             df_train, df_val = df_utils.split_df(DF_concat,
-            n_lags=self.n_lags,
+            n_lags=aux_lags,
             n_forecasts=self.n_forecasts,
             valid_p=valid_p,
             inputs_overbleed=True,
@@ -763,9 +776,13 @@ class NeuralProphet:
             df = df.copy(deep=True)
             df = df_utils.check_dataframe(df, check_y=False)
             df = self._handle_missing_data(df, freq=freq, predicting=False)
+            if self.n_regressors>self.n_lags:
+                aux_lags=self.n_regressors
+            else:
+                aux_lags=self.n_lags
             folds = df_utils.crossvalidation_split_df(
                 df,
-                n_lags=self.n_lags,
+                n_lags=aux_lags,
                 n_forecasts=self.n_forecasts,
                 k=k,
                 fold_pct=fold_pct,
@@ -790,9 +807,13 @@ class NeuralProphet:
         df = df.copy(deep=True)
         df = df_utils.check_dataframe(df, check_y=False)
         df = self._handle_missing_data(df, freq=freq, predicting=False)
+        if self.n_regressors>self.n_lags:
+            aux_lags=self.n_regressors
+        else:
+            aux_lags=self.n_lags
         folds_val, folds_test = df_utils.double_crossvalidation_split_df(
             df,
-            n_lags=self.n_lags,
+            n_lags=aux_lags,
             n_forecasts=self.n_forecasts,
             k=k,
             valid_pct=valid_pct,
@@ -820,6 +841,10 @@ class NeuralProphet:
         Returns:
             metrics with training and potentially evaluation metrics
         """
+        if self.n_regressors>self.n_lags:
+            aux_lags=self.n_regressors
+        else:
+            aux_lags=self.n_lags
         self.data_freq = freq
         if epochs is not None:
             default_epochs = self.config_train.epochs
@@ -840,7 +865,7 @@ class NeuralProphet:
             )
             df = self._handle_missing_data(df, freq=self.data_freq)
         if validate_each_epoch:
-            df_train, df_val = df_utils.split_df(df, n_lags=self.n_lags, n_forecasts=self.n_forecasts, valid_p=valid_p)
+            df_train, df_val = df_utils.split_df(df, n_lags=aux_lags, n_forecasts=self.n_forecasts, valid_p=valid_p)
             metrics_df = self._train(df_train, df_val, progress_bar=progress_bar, plot_live_loss=plot_live_loss)
         else:
             metrics_df = self._train(df, progress_bar=progress_bar, plot_live_loss=plot_live_loss)
@@ -879,6 +904,10 @@ class NeuralProphet:
             REG,_=df_utils.list_check(regressors_df)
         if events_df is not None:
             EVE,_=df_utils.list_check(events_df)
+        if self.n_regressors>self.n_lags:
+            aux_lags=self.n_regressors
+        else:
+            aux_lags=self.n_lags
 
         if len(Range)>1:
             log.info("Make future dataframe with many episodes")
@@ -901,13 +930,13 @@ class NeuralProphet:
                 regressors_df = REG[I].copy(deep=True).reset_index(drop=True)
             n_lags = 0 if self.n_lags is None else self.n_lags
             if periods is None:
-                periods = 1 if n_lags == 0 else self.n_forecasts
+                periods = 1 if n_lags == 0 and not self.allow_nnet_covar else self.n_forecasts
             else:
                 assert periods >= 0
 
             if isinstance(n_historic_predictions, bool):
                 if n_historic_predictions:
-                    n_historic_predictions = len(df) - n_lags
+                    n_historic_predictions = len(df) - aux_lags
                 else:
                     n_historic_predictions = 0
             elif not isinstance(n_historic_predictions, int):
@@ -929,17 +958,17 @@ class NeuralProphet:
             last_date = pd.to_datetime(df["ds"].copy(deep=True)).sort_values().max()
             if len(df) < n_lags:
                 raise ValueError("Insufficient data for a prediction")
-            elif len(df) < n_lags + n_historic_predictions:
+            elif len(df) < aux_lags + n_historic_predictions:
                 log.warning(
                     "Insufficient data for {} historic forecasts, reduced to {}.".format(
-                        n_historic_predictions, len(df) - n_lags
+                        n_historic_predictions, len(df) - aux_lags
                     )
                 )
-                n_historic_predictions = len(df) - n_lags
-            if (n_historic_predictions + n_lags) == 0:
+                n_historic_predictions = len(df) - aux_lags
+            if (n_historic_predictions + aux_lags) == 0:
                 df = pd.DataFrame(columns=df.columns)
             else:
-                df = df[-(n_lags + n_historic_predictions) :]
+                df = df[-(aux_lags + n_historic_predictions) :]
 
             if len(df) > 0:
                 if len(df.columns) == 1 and "ds" in df:
@@ -960,7 +989,7 @@ class NeuralProphet:
                     "All events being treated as not occurring in future"
                 )
 
-            if n_lags > 0:
+            if n_lags > 0 or self.allow_nnet_covar:
                 if periods > 0 and periods != self.n_forecasts:
                     periods = self.n_forecasts
                     log.warning(
@@ -1030,6 +1059,10 @@ class NeuralProphet:
         Returns:
             df_forecast (pandas DataFrame): columns 'ds', 'y', 'trend' and ['yhat<i>']
         """
+        if self.n_regressors>self.n_lags:
+            aux_lags=self.n_regressors
+        else:
+            aux_lags=self.n_lags
         # TODO: Implement data sanity checks?
         if self.fitted is False:
             log.warning("Model has not been fitted. Predictions will be random.")
@@ -1087,7 +1120,7 @@ class NeuralProphet:
             for i in range(self.n_forecasts):
                 forecast_lag = i + 1
                 forecast = predicted[:, forecast_lag - 1]
-                pad_before = self.n_lags + forecast_lag - 1
+                pad_before = aux_lags + forecast_lag - 1
                 pad_after = self.n_forecasts - forecast_lag
                 yhat = np.concatenate(([None] * pad_before, forecast, [None] * pad_after))
                 df_forecast["yhat{}".format(i + 1)] = yhat
@@ -1104,7 +1137,7 @@ class NeuralProphet:
                     for i in range(self.n_forecasts):
                         forecast_lag = i + 1
                         forecast = components[comp][:, forecast_lag - 1]
-                        pad_before = self.n_lags + forecast_lag - 1
+                        pad_before = aux_lags + forecast_lag - 1
                         pad_after = self.n_forecasts - forecast_lag
                         yhat = np.concatenate(([None] * pad_before, forecast, [None] * pad_after))
                         df_forecast["{}{}".format(comp, i + 1)] = yhat
@@ -1114,7 +1147,7 @@ class NeuralProphet:
                 if comp not in lagged_components:
                     forecast_0 = components[comp][0, :]
                     forecast_rest = components[comp][1:, self.n_forecasts - 1]
-                    yhat = np.concatenate(([None] * self.n_lags, forecast_0, forecast_rest))
+                    yhat = np.concatenate(([None] * aux_lags, forecast_0, forecast_rest))
                     df_forecast[comp] = yhat
             DF[I]=df_forecast
         if len(DF)==1:
@@ -1195,36 +1228,44 @@ class NeuralProphet:
         self.highlight_forecast_step_n = step_number
         return self
 
-    def add_lagged_regressor(self, name, regularization=None, normalize="auto", only_last_value=False):
-        """Add a covariate time series as an additional lagged regressor to be used for fitting and predicting.
+
+    def add_lagged_regressor(self, names, n_regressors=0, regularization=None, normalize="auto", only_last_value=False):
+        """Add a covariate or list of covariate time series as additional lagged regressors to be used for fitting and predicting.
 
         The dataframe passed to `fit` and `predict` will have a column with the specified name to be used as
         a lagged regressor. When normalize=True, the covariate will be normalized unless it is binary.
 
         Args:
-            name (string):  name of the regressor.
+            names (string or list):  name of the regressor/list of regressors.
+            n_regressors (int): previous regressor steps to include in prediction.
             regularization (float): optional  scale for regularization strength
             normalize (bool): optional, specify whether this regressor will be
                 normalized prior to fitting.
                 if 'auto', binary regressors will not be normalized.
             only_last_value (bool):
-                False (default) use same number of lags as auto-regression
+                False (default) use number of n_regressors in prediction.
                 True: only use last known value as input
         Returns:
             NeuralProphet object
         """
+        self.n_regressors=n_regressors
+        if self.n_regressors>0:
+            self.allow_nnet_covar=True 
         if self.fitted:
             raise Exception("Covariates must be added prior to model fitting.")
-        if self.n_lags == 0:
-            raise Exception("Covariates must be set jointly with Auto-Regression.")
-        self._validate_column_name(name)
-        if self.config_covar is None:
-            self.config_covar = OrderedDict({})
-        self.config_covar[name] = configure.Covar(
-            reg_lambda=regularization,
-            normalize=normalize,
-            as_scalar=only_last_value,
-        )
+        if self.n_regressors == 0 or self.n_regressors == None:
+            raise Exception("Please, set number of lags for covariates (n_regressors)")
+        if not isinstance(names, list):
+            names = [names]
+        for name in names:
+            self._validate_column_name(name)
+            if self.config_covar is None:
+                self.config_covar = OrderedDict({})
+            self.config_covar[name] = configure.Covar(
+                reg_lambda=regularization,
+                normalize=normalize,
+                as_scalar=only_last_value,
+            )
         return self
 
     def add_future_regressor(self, name, regularization=None, normalize="auto", mode="additive"):
@@ -1423,7 +1464,7 @@ class NeuralProphet:
         Returns:
             A matplotlib figure.
         """
-        if self.n_lags == 0:
+        if self.n_lags == 0 and not self.allow_nnet_covar:
             raise ValueError("Use the standard plot function for models without lags.")
         if plot_history_data is None:
             fcst = fcst[-(include_previous_forecasts + self.n_forecasts + self.n_lags) :]

@@ -127,7 +127,8 @@ def debug_one(verbose=True):
     test_unit.UnitTests.plot = plot
     utests = test_unit.UnitTests()
     # utests.test_double_crossvalidation()
-    utests.test_global_modeling()
+    # utests.test_global_modeling()
+    utests.test_n_lags_and_n_regressors()
 
 
 if __name__ == "__main__":
