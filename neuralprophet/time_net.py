@@ -14,10 +14,8 @@ log = logging.getLogger("NP.time_net")
 
 def new_param(dims):
     """Create and initialize a new torch Parameter.
-
     Args:
         dims (list or tuple): desired dimensions of parameter
-
     Returns:
         initialized Parameter
     """
@@ -29,7 +27,6 @@ def new_param(dims):
 
 class TimeNet(nn.Module):
     """Linear time regression fun and some not so linear fun.
-
     A modular model that models classic time-series components
     - trend
     - seasonality
@@ -217,7 +214,6 @@ class TimeNet(nn.Module):
     @property
     def get_trend_deltas(self):
         """trend deltas for regularization.
-
         update if trend is modelled differently"""
         if self.config_trend is None or self.config_trend.n_changepoints < 1:
             return None
@@ -238,10 +234,8 @@ class TimeNet(nn.Module):
     def get_event_weights(self, name):
         """
         Retrieve the weights of event features given the name
-
         Args:
             name (string): Event name
-
         Returns:
             event_param_dict (OrderedDict): Dict of the weights of all offsets corresponding
             to a particular event.
@@ -264,10 +258,8 @@ class TimeNet(nn.Module):
     def get_reg_weights(self, name):
         """
         Retrieve the weights of regressor features given the name
-
         Args:
             name (string): Regressor name
-
         Returns:
             weight (torch.tensor): Weight corresponding to the given regressor
         """
@@ -285,11 +277,9 @@ class TimeNet(nn.Module):
 
     def _piecewise_linear_trend(self, t):
         """Piecewise linear trend, computed segmentwise or with deltas.
-
         Args:
             t (torch tensor, float): normalized time of
                 dimensions (batch, n_forecasts)
-
         Returns:
             Trend component, same dimensions as input t
         """
@@ -319,14 +309,11 @@ class TimeNet(nn.Module):
 
     def trend(self, t):
         """Computes trend based on model configuration.
-
         Args:
             t (torch tensor float): normalized time
                 dimensions (batch, n_forecasts)
-
         Returns:
             Trend component, same dimensions as input t
-
         """
         if self.config_trend.growth == "off":
             trend = torch.zeros_like(t)
@@ -338,12 +325,10 @@ class TimeNet(nn.Module):
 
     def seasonality(self, features, name):
         """Compute single seasonality component.
-
         Args:
             features (torch tensor, float): features related to seasonality component
                 dims: (batch, n_forecasts, n_features)
             name (str): name of seasonality. for attributiun to corresponding model weights.
-
         Returns:
             forecast component of dims (batch, n_forecasts)
         """
@@ -351,11 +336,9 @@ class TimeNet(nn.Module):
 
     def all_seasonalities(self, s):
         """Compute all seasonality components.
-
         Args:
             s (dict(torch tensor, float)): dict of named seasonalities (keys) with their features (values)
                 dims of each dict value: (batch, n_forecasts, n_features)
-
         Returns:
             forecast component of dims (batch, n_forecasts)
         """
@@ -383,11 +366,9 @@ class TimeNet(nn.Module):
 
     def auto_regression(self, lags):
         """Computes auto-regessive model component AR-Net.
-
         Args:
             lags (torch tensor, float): previous times series values.
                 dims: (batch, n_lags)
-
         Returns:
             forecast component of dims: (batch, n_forecasts)
         """
@@ -400,12 +381,10 @@ class TimeNet(nn.Module):
 
     def covariate(self, lags, name):
         """Compute single covariate component.
-
         Args:
             lags (torch tensor, float): lagged values of covariate
                 dims: (batch, n_lags)
             name (str): name of covariate. for attributiun to corresponding model weights.
-
         Returns:
             forecast component of dims (batch, n_forecasts)
         """
@@ -418,11 +397,9 @@ class TimeNet(nn.Module):
 
     def all_covariates(self, covariates):
         """Compute all covariate components.
-
         Args:
             covariates (dict(torch tensor, float)): dict of named covariates (keys) with their features (values)
                 dims of each dict value: (batch, n_lags)
-
         Returns:
             forecast component of dims (batch, n_forecasts)
         """
@@ -435,7 +412,6 @@ class TimeNet(nn.Module):
 
     def forward(self, inputs):
         """This method defines the model forward pass.
-
         Time input is required. Minimum model setup is a linear trend.
         Args:
             inputs (dict):
@@ -497,7 +473,6 @@ class TimeNet(nn.Module):
 
     def compute_components(self, inputs):
         """This method returns the values of each model component.
-
         Time input is required. Minimum model setup is a linear trend.
         Args:
             inputs (dict):
