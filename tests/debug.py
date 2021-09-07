@@ -126,11 +126,11 @@ def debug_one(verbose=True):
 
     test_unit.UnitTests.plot = plot
     utests = test_unit.UnitTests()
-    ##
     # utests.test_double_crossvalidation()
+    utests.test_global_modeling()
 
 
 if __name__ == "__main__":
     # debug_logger()
-    debug_all()
-    # debug_one()
+    # debug_all()
+    debug_one()
