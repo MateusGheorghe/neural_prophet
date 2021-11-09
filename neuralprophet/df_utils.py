@@ -163,9 +163,9 @@ def init_data_params(
                         [(k, (v.shift, v.scale)) for k, v in data_params[-1].items()]
                     )
                 )
-                log.warning(
-                    "Local normalization will be implemented in the future - list of data_params may break the code"
-                )
+                # log.warning(
+                #     "Local normalization will be implemented in the future - list of data_params may break the code"
+                # )
         else:
             # Global Normalization
             df, _ = join_dataframes(df_list)
@@ -250,7 +250,7 @@ def _normalization(df, data_params):
     return df
 
 
-def normalize(df, data_params, local_modeling=False):
+def normalize(df, data_params, local_modeling=False, local_modeling_index="auto"):
     """Apply data scales.
 
     Applies data scaling factors to df using data_params.
