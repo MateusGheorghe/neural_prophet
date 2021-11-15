@@ -19,7 +19,7 @@ from neuralprophet import metrics
 
 
 log = logging.getLogger("NP.forecaster")
-print("Neural Prophet Classification running")
+# print("Neural Prophet Classification running")
 
 
 METRICS = {
@@ -813,7 +813,7 @@ class NeuralProphet:
         """
         df = df_utils.copy_list(df) if isinstance(df, list) else df.copy(deep=True)
         df = self._check_dataframe(df, check_y=False, exogenous=False)
-        df = self._handle_missing_data(df, freq=freq, predicting=False)
+        df = self.handle_missing_data(df, freq=freq, predicting=False)
         if self.n_regressors > self.n_lags:
             aux_lags = self.n_regressors
         else:
