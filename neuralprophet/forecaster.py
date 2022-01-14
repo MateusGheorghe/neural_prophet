@@ -653,7 +653,6 @@ class NeuralProphet:
                 "Changing n_forecasts to 1. Without lags, the forecast can be "
                 "computed for any future time, independent of lagged values. "
             )
-
         loader = self._init_train_loader(df)
 
         # set up Metrics
