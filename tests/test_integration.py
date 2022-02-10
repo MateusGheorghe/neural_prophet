@@ -686,32 +686,30 @@ def test_global_modeling_local_normalization():
     df1_0 = df.iloc[:128, :].copy(deep=True)
     df2_0 = df.iloc[128:256, :].copy(deep=True)
     df3_0 = df.iloc[256:384, :].copy(deep=True)
-    m = NeuralProphet(n_forecasts=2, n_lags=10, epochs=EPOCHS, batch_size=BATCH_SIZE)
+    m = NeuralProphet(n_forecasts=2, n_lags=10, epochs=EPOCHS, batch_size=BATCH_SIZE, local_normalization=True)
     df_dict = {"dataset1": df1_0, "dataset2": df2_0}
     df_dict2 = {"dataset1": df1_0, "dataset3": df3_0}
     df_list = [df1_0, df2_0]
     train_list, test_list = m.split_df(df_list, freq="D")
     with pytest.raises(ValueError):
-        m.fit(train_list, freq="D", local_modeling=True)
+        m.fit(train_list, freq="D")
     log.info("Error - provided list instead of dict")
     m = NeuralProphet(n_forecasts=2, n_lags=10, epochs=EPOCHS, batch_size=BATCH_SIZE)
     train_dict, test_dict = m.split_df(df_dict, local_split=True, freq="D")
-    m = NeuralProphet(n_forecasts=2, n_lags=10, epochs=EPOCHS, batch_size=BATCH_SIZE)
+    m = NeuralProphet(n_forecasts=2, n_lags=10, epochs=EPOCHS, batch_size=BATCH_SIZE, local_normalization=True)
     with pytest.raises(ValueError):
         m.fit(
             train_dict,
             freq="D",
             validation_df=df2_0,
-            local_modeling=True,
         )
     log.info("Error - name of validation df was not provided")
-    m = NeuralProphet(n_forecasts=2, n_lags=10, epochs=EPOCHS, batch_size=BATCH_SIZE)
+    m = NeuralProphet(n_forecasts=2, n_lags=10, epochs=EPOCHS, batch_size=BATCH_SIZE, local_normalization=True)
     m.fit(
         train_dict,
         freq="D",
         validation_df=df2_0,
         validation_df_name="dataset2",
-        local_modeling=True,
     )  # Now it works because we provide the name of the validation_df
     future = m.make_future_dataframe(df=test_dict)
     forecast = m.predict(future)
@@ -734,19 +732,35 @@ def test_global_modeling_local_normalization():
     with pytest.raises(ValueError):
         metrics = m.test(df=df_dict2)
     log.info("Error - dict with names not provided in the train dict (not in the data params dict)")
-    m = NeuralProphet(n_forecasts=2, n_lags=10, epochs=EPOCHS, batch_size=BATCH_SIZE)
-    m.fit(train_dict, freq="D", local_modeling=False)
+    m = NeuralProphet(n_forecasts=2, n_lags=10, epochs=EPOCHS, batch_size=BATCH_SIZE, local_normalization=False)
+    m.fit(train_dict, freq="D")
     forecast = m.predict(df=test_dict)
     metrics = m.test(df=test_dict)
     forecast_trend = m.predict_trend(df=test_dict)
     forecast_seasonal_componets = m.predict_seasonal_components(df=test_dict)
     log.info("Global modeling and global normalization but with dict")
-    m = NeuralProphet(n_forecasts=2, n_lags=10, epochs=EPOCHS, batch_size=BATCH_SIZE)
-    m.fit(train_dict, freq="D", local_modeling=True, local_time_normalization=True)
-    m.plot_parameters(df_name="dataset1")
+    m = NeuralProphet(
+        n_forecasts=2,
+        n_lags=10,
+        epochs=EPOCHS,
+        batch_size=BATCH_SIZE,
+        local_normalization=True,
+        local_time_normalization=True,
+    )
+    m.fit(train_dict, freq="D")
     with pytest.raises(ValueError):
-        m.plot_parameters()
-    log.info("Error - df_name needed to be provided in case of local_time_normalization true for plot_parameters")
+        forecast = m.predict(df=df2_0)
+    log.info("unknown_data_normalization was not set to True")
+    with pytest.raises(ValueError):
+        metrics = m.test(df=df2_0)
+    log.info("unknown_data_normalization was not set to True")
+    forecast = m.predict(df=df2_0, unknown_data_normalization=True)
+    metrics = m.test(df=df2_0, unknown_data_normalization=True)
+    m.plot_parameters(df_name="dataset1")
+    m.plot_parameters()
+    with pytest.raises(ValueError):
+        m.plot_parameters(df_name="dataset5")
+    log.info("plot should work even with df_name=None or df_name not present in self.df_name")
 
 
 def test_global_modeling_plus_regressors():

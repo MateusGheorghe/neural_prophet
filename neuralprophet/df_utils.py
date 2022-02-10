@@ -19,6 +19,7 @@ class GlobalDatasetLocalNorm:
     df_list: list
     df_names: list = None
     norm_params: list = None
+    global_data_params: dict = None
 
     def __post_init__(self):
         self.df_list_len = len(self.df_list)
@@ -43,7 +44,7 @@ def deepcopy_df_list(df):
     """
     if isinstance(df, list):
         df_list = [df_aux.copy(deep=True) for df_aux in df]
-    elif isinstance(df, pd.DataFrame):
+    if isinstance(df, pd.DataFrame):
         df_list = [df.copy(deep=True)]
     return df_list
 
@@ -181,7 +182,7 @@ def init_data_params(
     covariates_config=None,
     regressor_config=None,
     events_config=None,
-    local_modeling=False,
+    local_normalization=False,
     df_names=None,
     local_time_normalization=False,
 ):
@@ -199,7 +200,7 @@ def init_data_params(
         regressor_config (OrderedDict): extra regressors (with known future values)
             with sub_parameters normalize (bool)
         events_config (OrderedDict): user specified events configs
-        local_modeling (bool): when set to true each episode from list of dataframes will be considered locally (in case of Global modeling) - in this case a dict of dataframes should be the input
+        local_normalization (bool): when set to true each episode from list of dataframes will be considered locally (in case of Global modeling) - in this case a dict of dataframes should be the input
         df_names (list): list of names of dataframes provided (used for local normalization)
         local_time_normalization (bool): set time data_params locally when set to true (only valid in case of global modeling - local normalization)
     Returns:
@@ -209,12 +210,10 @@ def init_data_params(
 
     if isinstance(df, list):
         df_list = deepcopy_df_list(df)
-        if local_modeling:
+        if local_normalization:
             data_params = list()
             df_merged, _ = join_dataframes(df_list)
-            df_merged.drop_duplicates("ds", inplace=True)
-            df_merged = _check_dataframe(df_merged, normalize, covariates_config, regressor_config, events_config)
-            data_params_merged = data_params_definition(
+            global_data_params = data_params_definition(
                 df_merged, normalize, covariates_config, regressor_config, events_config
             )
             for df in df_list:
@@ -222,14 +221,14 @@ def init_data_params(
                     df, normalize, covariates_config, regressor_config, events_config
                 )
                 if not local_time_normalization:  # Ovewrites time data_params considering the entire list of dataframes
-                    data_params_aux["ds"] = ShiftScale(data_params_merged["ds"].shift, data_params_merged["ds"].scale)
+                    data_params_aux["ds"] = ShiftScale(global_data_params["ds"].shift, global_data_params["ds"].scale)
                 data_params.append(data_params_aux)
                 log.debug(
                     "Global Modeling - Local Normalization - Data Parameters (shift, scale): {}".format(
                         [(k, (v.shift, v.scale)) for k, v in data_params[-1].items()]
                     )
                 )
-            data_params = GlobalDatasetLocalNorm(df_list, df_names, data_params)
+            data_params = GlobalDatasetLocalNorm(df_list, df_names, data_params, global_data_params)
         else:
             # Global Normalization
             df, _ = join_dataframes(df_list)
@@ -314,8 +313,8 @@ def _normalization(df, data_params):
     return df
 
 
-def local_normalization(df_list, data_params, df_names):
-    """Apply data scales in case of local_modeling (local normalization for global modeling)
+def _local_normalization(df_list, data_params, df_names, unknown_data_normalization):
+    """Apply data scales in case of local_normalization (for global modeling)
     Applies data scaling factors to df using data_params.
 
     Args:
@@ -323,29 +322,36 @@ def local_normalization(df_list, data_params, df_names):
         data_params (OrderedDict): scaling values,as returned by init_data_params
             with ShiftScale entries containing 'shift' and 'scale' parameters
         df_names(list,str): list of names or str of dataframes provided (used for local modeling or local normalization)
+        unknown_data_normalization (bool): when unknown_data_normalization is set to True, test data is normalized with global data params even if trained with local data params (global modeling with local normalization)
     Returns:
         df: pd.DataFrame,list normalized
     """
     df_names = df_names if isinstance(df_names, list) else [df_names]
     df_list = deepcopy_df_list(df_list)
-    df_dict = convert_list_to_dict(df_names, df_list)
     df_list_norm = list()
-    for name in df_names:
-        if name not in data_params.df_names:
-            raise ValueError("Dataset name {name!r} missing from data params".format(name=name))
-        else:
-            df_list_norm.append(_normalization(df_dict[name], data_params.norm_params_dict[name]))
-            log.debug("Local normalization of {name!r}".format(name=name))
-    if len(df_list_norm) != len(df_list):
-        raise ValueError(
-            "List of dataset names is incomplete. Only {} names match with original data params.".format(
-                len(df_list_norm)
+    if unknown_data_normalization:
+        # when unknown_data_normalization is set to True, data is normalized with global data params even if trained with local data params
+        for df in df_list:
+            df_list_norm.append(_normalization(df, data_params.global_data_params))
+            log.debug("Global normalization when train dataset was locally normalized")
+    else:
+        df_dict = convert_list_to_dict(df_names, df_list)
+        for name in df_names:
+            if name not in data_params.df_names:
+                raise ValueError("Dataset name {name!r} missing from data params".format(name=name))
+            else:
+                df_list_norm.append(_normalization(df_dict[name], data_params.norm_params_dict[name]))
+                log.debug("Local normalization of {name!r}".format(name=name))
+        if len(df_list_norm) != len(df_list):
+            raise ValueError(
+                "List of dataset names is incomplete. Only {} names match with original data params.".format(
+                    len(df_list_norm)
+                )
             )
-        )
     return df_list_norm
 
 
-def normalize(df, data_params, local_modeling=False, df_names=None):
+def normalize(df, data_params, local_normalization=False, df_names=None, unknown_data_normalization=False):
     """Apply data scales.
 
     Applies data scaling factors to df using data_params.
@@ -354,16 +360,17 @@ def normalize(df, data_params, local_modeling=False, df_names=None):
         df (list,pd.Dataframe): with columns 'ds', 'y', (and potentially more regressors)
         data_params (OrderedDict): scaling values,as returned by init_data_params
             with ShiftScale entries containing 'shift' and 'scale' parameters
-        local_modeling (bool): when set to true each episode from list of dataframes will be considered locally (in case of Global modeling) - in this case a dict of dataframes should be the input
+        local_normalization (bool): when set to true each episode from list of dataframes will be considered locally (in case of Global modeling) - in this case a dict of dataframes should be the input
         df_names (list,str): list of names or str of dataframes provided (used for local modeling or local normalization)
+        unknown_data_normalization (bool): when unknown_data_normalization is set to True, test data is normalized with global data params even if trained with local data params (global modeling with local normalization)
     Returns:
         df: pd.DataFrame or list of pd.DataFrame, normalized
     """
 
     df_list = deepcopy_df_list(df)
-    if local_modeling:
+    if local_normalization:
         # Local Normalization
-        df_list_norm = local_normalization(df_list, data_params, df_names)
+        df_list_norm = _local_normalization(df_list, data_params, df_names, unknown_data_normalization)
         df = df_list_norm[0] if len(df_list_norm) == 1 else df_list_norm
     else:
         if len(df_list) > 1:
@@ -650,7 +657,7 @@ def split_df(df, n_lags, n_forecasts, valid_p=0.2, inputs_overbleed=True, local_
         valid_p (float, int): fraction (0,1) of data to use for holdout validation set,
             or number of validation samples >1
         inputs_overbleed (bool): Whether to allow last training targets to be first validation inputs (never targets)
-        local_modeling (bool): when set to true each episode from list of dataframes will be considered locally (in case of Global modeling) - in this case a dict of dataframes should be the input
+        local_normalization (bool): when set to true each episode from list of dataframes will be considered locally (in case of Global modeling) - in this case a dict of dataframes should be the input
     Returns:
         df_train (pd.DataFrame or list of pd.Dataframe): training data
         df_val (pd.DataFrame or list of pd.Dataframe): validation data
@@ -977,16 +984,29 @@ def infer_frequency(df, freq, n_lags, min_freq_percentage=0.7):
     return freq_str
 
 
-def check_prediction_df_names(former_df_names, df_names):
+def check_local_normalization(former_df_names, df_names, size_of_list, unknown_data_normalization):
     """Checks whether the dataset names provided for prediction match the previously used dataset names for training.
 
     Args:
         former_df_names (list): usually the names provided to the dict of dataframes used in the fit procedure (self.df_names - train dict keys)
         df_names (list): list of the names of dataframes provided for any of the procedures after the model is trained (keys of test dict)
+        size_of_list (int): size of list of time series
+        unknown_data_normalization (bool): when unknown_data_normalization is set to True, test data is normalized with global data params even if trained with local data params (global modeling with local normalization)
+    Returns:
+        list_of_names (list): list with df_names
     """
-    if df_names is None:
-        raise ValueError("Please insert a dict with key values compatible with train dict")
+    if unknown_data_normalization is not True:
+        if df_names is None:
+            raise ValueError(
+                "Please insert a dict with key values compatible with train dict. If local params for time series are not known, please set unknown_data_normalization to True, so global data params are used for the test dataset"
+            )
+        else:
+            missing_names = [name for name in df_names if name not in former_df_names]
+            if len(missing_names) > 0:
+                raise ValueError(
+                    "dataset names {} not valid - missing from training dataset names".format(missing_names)
+                )
+        list_of_names = df_names
     else:
-        missing_names = [name for name in df_names if name not in former_df_names]
-        if len(missing_names) > 0:
-            raise ValueError("dataset names {} not valid - missing from training dataset names".format(missing_names))
+        list_of_names = [None] * size_of_list
+    return list_of_names
